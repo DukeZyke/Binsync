@@ -1,0 +1,19 @@
+{
+  "name": "Binsync",
+  "description": "Mobile application for garbage tracking and route plotting",
+  "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DukeZyke/Binsync.git"
+  },
+  "keywords": [
+    "flutter",
+    "dart",
+    "openstreetmap",
+    "garbage-tracking",
+    "route-plotting",
+    "mobile-app"
+  ],
+  "author": "DukeZyke",
+  "license": "MIT"
+}

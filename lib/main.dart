@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:binsync/map.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
+import 'screens/login_screen.dart';
+import 'screens/report_screen.dart';
+import 'services/auth_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,7 +31,29 @@ class BinsyncApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
       ),
-      home: const MainScreen(),
+      home: StreamBuilder<User?>(
+        stream: AuthService().authStateChanges,
+        builder: (context, snapshot) {
+          // Show loading indicator while checking auth state
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00A86B),
+                ),
+              ),
+            );
+          }
+
+          // Show login screen if not authenticated
+          if (!snapshot.hasData) {
+            return const LoginScreen();
+          }
+
+          // Show main app if authenticated
+          return const MainScreen();
+        },
+      ),
     );
   }
 }
@@ -43,11 +69,11 @@ class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 1; // Start with Map screen
 
   // List of screens for navigation
-  final List<Widget> _screens = [
-    const HomeScreen(),
-    const MapScreen(),
-    const ReportScreen(),
-    const StatsScreen(),
+  final List<Widget> _screens = const [
+    HomeScreen(),
+    MapScreen(),
+    ReportScreen(),
+    StatsScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -114,6 +140,8 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final authService = AuthService();
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF00A86B),
@@ -126,6 +154,14 @@ class HomeScreen extends StatelessWidget {
           ),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: () async {
+              await authService.signOut();
+            },
+          ),
+        ],
       ),
       body: Center(
         child: Padding(
@@ -157,47 +193,6 @@ class HomeScreen extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// Report Screen
-class ReportScreen extends StatelessWidget {
-  const ReportScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.report_problem,
-              size: 100,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Report Issues',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Report functionality coming soon',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey,
-              ),
-            ),
-          ],
         ),
       ),
     );

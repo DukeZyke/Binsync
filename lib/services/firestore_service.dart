@@ -10,6 +10,9 @@ class FirestoreService {
     required double longitude,
     required String address,
     String? reportedBy,
+    String? issueType,
+    String? description,
+    String? photoPath,
   }) async {
     try {
       DocumentReference docRef = await _db.collection('garbage_reports').add({
@@ -17,6 +20,9 @@ class FirestoreService {
         'longitude': longitude,
         'address': address,
         'reportedBy': reportedBy ?? 'anonymous',
+        'issueType': issueType ?? 'other',
+        'description': description ?? '',
+        'photoPath': photoPath ?? '',
         'timestamp': FieldValue.serverTimestamp(),
         'status': 'pending', // pending, collected, cancelled
         'collectorId': null,

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:binsync/map.dart';
 
 void main() {
   runApp(const BinsyncApp());
@@ -13,167 +12,214 @@ class BinsyncApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Binsync - Garbage Tracking',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00A86B),
+          primary: const Color(0xFF00A86B),
+        ),
         useMaterial3: true,
+        scaffoldBackgroundColor: Colors.white,
       ),
-      home: const MapScreen(),
+      home: const MainScreen(),
     );
   }
 }
 
-class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
 
   @override
-  State<MapScreen> createState() => _MapScreenState();
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
-  final MapController _mapController = MapController();
-  
-  // Default location (can be changed to user's location)
-  final LatLng _initialCenter = LatLng(37.7749, -122.4194); // San Francisco
-  final double _initialZoom = 13.0;
-  
-  // Sample markers for garbage bins
-  final List<Marker> _markers = [];
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 1; // Start with Map screen
 
-  @override
-  void initState() {
-    super.initState();
-    _initializeMarkers();
-  }
+  // List of screens for navigation
+  final List<Widget> _screens = [
+    const HomeScreen(),
+    const MapScreen(),
+    const ReportScreen(),
+    const StatsScreen(),
+  ];
 
-  void _initializeMarkers() {
-    // Add some sample garbage bin locations
-    _markers.addAll([
-      Marker(
-        point: LatLng(37.7749, -122.4194),
-        width: 40,
-        height: 40,
-        child: const Icon(
-          Icons.delete,
-          color: Colors.red,
-          size: 40,
-        ),
-      ),
-      Marker(
-        point: LatLng(37.7849, -122.4094),
-        width: 40,
-        height: 40,
-        child: const Icon(
-          Icons.delete,
-          color: Colors.green,
-          size: 40,
-        ),
-      ),
-      Marker(
-        point: LatLng(37.7649, -122.4294),
-        width: 40,
-        height: 40,
-        child: const Icon(
-          Icons.delete,
-          color: Colors.orange,
-          size: 40,
-        ),
-      ),
-    ]);
-  }
-
-  void _addMarker(LatLng point) {
+  void _onItemTapped(int index) {
     setState(() {
-      _markers.add(
-        Marker(
-          point: point,
-          width: 40,
-          height: 40,
-          child: const Icon(
-            Icons.delete,
-            color: Colors.blue,
-            size: 40,
-          ),
-        ),
-      );
+      _selectedIndex = index;
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Binsync - Garbage Tracking'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.my_location),
-            onPressed: () {
-              // Reset to initial location
-              _mapController.move(_initialCenter, _initialZoom);
-            },
-            tooltip: 'Reset Location',
-          ),
-        ],
-      ),
-      body: FlutterMap(
-        mapController: _mapController,
-        options: MapOptions(
-          initialCenter: _initialCenter,
-          initialZoom: _initialZoom,
-          onTap: (tapPosition, point) {
-            // Add marker on tap
-            _addMarker(point);
-          },
+      body: _screens[_selectedIndex],
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
         ),
-        children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.example.binsync',
-            maxZoom: 19,
-          ),
-          MarkerLayer(
-            markers: _markers,
-          ),
-        ],
+        child: BottomNavigationBar(
+          type: BottomNavigationBarType.fixed,
+          currentIndex: _selectedIndex,
+          onTap: _onItemTapped,
+          selectedItemColor: const Color(0xFF00A86B),
+          unselectedItemColor: Colors.grey,
+          selectedFontSize: 12,
+          unselectedFontSize: 12,
+          elevation: 0,
+          backgroundColor: Colors.white,
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.map_outlined),
+              activeIcon: Icon(Icons.map),
+              label: 'Map',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.description_outlined),
+              activeIcon: Icon(Icons.description),
+              label: 'Report',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.bar_chart_outlined),
+              activeIcon: Icon(Icons.bar_chart),
+              label: 'Stats',
+            ),
+          ],
+        ),
       ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            heroTag: 'zoom_in',
-            onPressed: () {
-              final currentZoom = _mapController.camera.zoom;
-              _mapController.move(
-                _mapController.camera.center,
-                currentZoom + 1,
-              );
-            },
-            child: const Icon(Icons.add),
-          ),
-          const SizedBox(height: 10),
-          FloatingActionButton(
-            heroTag: 'zoom_out',
-            onPressed: () {
-              final currentZoom = _mapController.camera.zoom;
-              _mapController.move(
-                _mapController.camera.center,
-                currentZoom - 1,
-              );
-            },
-            child: const Icon(Icons.remove),
-          ),
-          const SizedBox(height: 10),
-          FloatingActionButton(
-            heroTag: 'clear_markers',
-            onPressed: () {
-              setState(() {
-                _markers.clear();
-                _initializeMarkers();
-              });
-            },
-            child: const Icon(Icons.clear),
-          ),
-        ],
+    );
+  }
+}
+
+// Home Screen
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.delete_outline,
+              size: 100,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Welcome to Binsync',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Track and manage garbage collection efficiently',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Report Screen
+class ReportScreen extends StatelessWidget {
+  const ReportScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.report_problem,
+              size: 100,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Report Issues',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Report functionality coming soon',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Stats Screen
+class StatsScreen extends StatelessWidget {
+  const StatsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.analytics,
+              size: 100,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Statistics',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Statistics functionality coming soon',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

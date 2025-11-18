@@ -8,7 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:binsync/main.dart';
+import 'package:binsync/map.dart';
 
 void main() {
   testWidgets('Binsync app smoke test', (WidgetTester tester) async {

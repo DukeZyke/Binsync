@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'dart:async';
 import 'package:binsync/services/firestore_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -29,17 +30,23 @@ class _MapScreenState extends State<MapScreen> {
   String _locationText = '';
   Timer? _pinLockTimer;
   final FirestoreService _firestoreService = FirestoreService();
+  
+  // Garbage truck tracking
+  List<Map<String, dynamic>> _activeCollectors = [];
+  StreamSubscription<QuerySnapshot>? _collectorsSubscription;
 
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
     _getCurrentLocation();
+    _loadActiveCollectors();
   }
 
   @override
   void dispose() {
     _pinLockTimer?.cancel();
+    _collectorsSubscription?.cancel();
     super.dispose();
   }
 
@@ -85,9 +92,9 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // Get current position
+      // Get current position with best accuracy for navigation
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
       );
 
       if (mounted) {
@@ -113,6 +120,26 @@ class _MapScreenState extends State<MapScreen> {
         });
       }
     }
+  }
+
+  void _loadActiveCollectors() {
+    _collectorsSubscription = FirebaseFirestore.instance
+        .collection('active_collectors')
+        .snapshots()
+        .listen((snapshot) {
+      if (mounted) {
+        setState(() {
+          _activeCollectors = snapshot.docs.map((doc) {
+            final data = doc.data();
+            return {
+              'latitude': data['latitude'] as double,
+              'longitude': data['longitude'] as double,
+              'userId': data['userId'] as String,
+            };
+          }).toList();
+        });
+      }
+    });
   }
 
   void _startPinning() {
@@ -242,14 +269,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _cancelPinning() {
-    setState(() {
-      _isPinning = false;
-      _showDoneButton = false;
-    });
-    _pinLockTimer?.cancel();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -357,6 +376,7 @@ class _MapScreenState extends State<MapScreen> {
                       options: MapOptions(
                         initialCenter: _initialCenter,
                         initialZoom: _initialZoom,
+                        initialRotation: 0.0, // Start facing north
                         minZoom: 2.0,
                         maxZoom: 19.0,
                         interactionOptions: const InteractionOptions(
@@ -380,6 +400,25 @@ class _MapScreenState extends State<MapScreen> {
                               'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                           userAgentPackageName: 'com.example.binsync',
                           maxZoom: 19,
+                        ),
+                        // Garbage truck markers
+                        MarkerLayer(
+                          markers: _activeCollectors.map((collector) {
+                            return Marker(
+                              point: LatLng(
+                                collector['latitude'] as double,
+                                collector['longitude'] as double,
+                              ),
+                              width: 40,
+                              height: 40,
+                              rotate: false, // Don't rotate with map
+                              child: const Icon(
+                                Icons.local_shipping,
+                                color: Color(0xFF00A86B),
+                                size: 40,
+                              ),
+                            );
+                          }).toList(),
                         ),
                       ],
                     ),
@@ -543,16 +582,34 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                   ],
                 ),
-      floatingActionButton: !_isPinning
-          ? Padding(
-              padding: const EdgeInsets.only(bottom: 80),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          // North alignment button (always visible)
+          FloatingActionButton(
+            heroTag: 'north',
+            mini: true,
+            onPressed: () {
+              _mapController?.rotate(0.0);
+            },
+            backgroundColor: Colors.white,
+            child: const Icon(Icons.navigation, color: Color(0xFF00A86B)),
+          ),
+          const SizedBox(height: 10),
+          // Pin location button (only when not pinning)
+          if (!_isPinning) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 70),
               child: FloatingActionButton(
+                heroTag: 'pin',
                 onPressed: _startPinning,
                 backgroundColor: const Color(0xFF00A86B),
                 child: const Icon(Icons.add_location, color: Colors.white),
               ),
-            )
-          : null,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

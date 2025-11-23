@@ -12,6 +12,8 @@ import 'screens/user_map_screen.dart';
 import 'services/auth_service.dart';
 import 'services/fcm_service.dart';
 import 'services/notification_scheduler.dart';
+import 'services/location_service.dart';
+import 'widgets/app_drawer.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +28,14 @@ void main() async {
 
   // Start notification scheduler
   NotificationScheduler().startScheduler();
+
+  // Initialize location service in background
+  LocationService().initializeLocation().then((_) {
+    print('Location initialized');
+  }).catchError((error) {
+    print('Location initialization error: $error');
+    return null;
+  });
 
   runApp(const BinsyncApp());
 }
@@ -111,7 +121,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  int _selectedIndex = 1; // Start with Map screen
+  int _selectedIndex = 0; // Start with Home screen
 
   // List of screens for navigation
   final List<Widget> _screens = const [
@@ -189,12 +199,15 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
+      drawer: const AppDrawer(), // Add the side drawer
       appBar: AppBar(
         backgroundColor: const Color(0xFF00A86B),
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.menu, color: Colors.white),
-          onPressed: () {},
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu, color: Colors.white),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
         ),
         title: const Text(
           'BinSync',

@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../services/firestore_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -23,41 +25,30 @@ class _ReportScreenState extends State<ReportScreen> {
   Position? _currentPosition;
   File? _imageFile;
   bool _isSubmitting = false;
+  String? _selectedActivityId;
 
   final List<Map<String, dynamic>> _issueTypes = [
     {
-      'id': 'missed_bin',   //change icon and label sa syakto
+      'id': 'missed_bin',
       'label': 'Missed Bin',
       'icon': Icons.delete_outline,
       'color': Colors.red
     },
     {
-      'id': 'damaged_bin',   //change icon and label sa syakto
+      'id': 'damaged_bin',
       'label': 'Damaged Bin',
       'icon': Icons.warning_amber,
       'color': Colors.orange
     },
     {
-      'id': 'misplaced_waste',   //change icon and label sa syakto
+      'id': 'misplaced_waste',
       'label': 'Misplaced Waste',
       'icon': Icons.recycling,
       'color': Colors.blue
     },
     {
-      'id': 'pest_problem',   //change icon and label sa syakto
-      'label': 'Pest Problem',
-      'icon': Icons.bug_report,
-      'color': Colors.yellow
-    },
-    {
-      'id': 'bad_odor',   //change icon and label sa syakto
-      'label': 'Bad Odor',
-      'icon': Icons.air,
-      'color': Colors.purple
-    },
-    {
-      'id': 'other',   //change icon and label sa syakto
-      'label': 'Other Issue',
+      'id': 'other_issues',
+      'label': 'Other Issues',
       'icon': Icons.more_horiz,
       'color': Colors.grey
     },
@@ -207,6 +198,18 @@ class _ReportScreenState extends State<ReportScreen> {
       return;
     }
 
+    // Require description if "Other Issues" is selected
+    if (_selectedIssue == 'other_issues' &&
+        _descriptionController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please provide a description for "Other Issues"'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     if (_currentPosition == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -265,13 +268,15 @@ class _ReportScreenState extends State<ReportScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF00A86B),
         elevation: 0,
         title: const Text(
-          'Report',
+          'BinSync',
           style: TextStyle(
             color: Colors.white,
             fontSize: 20,
@@ -279,61 +284,250 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
         ),
         centerTitle: false,
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: Colors.white),
+          onPressed: () {
+            // Menu action
+          },
+        ),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Location card
+            // Report History Section
+            const Text(
+              'Select an activity you want to report',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Scrollable Activity List
             Container(
-              padding: const EdgeInsets.all(16),
+              height: 200,
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.grey[300]!),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.location_on, color: Color(0xFF00A86B)),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Bin Location',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+              child: user == null
+                  ? const Center(
+                      child: Text(
+                        'Please sign in to view activities',
+                        style: TextStyle(color: Colors.grey),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _locationText,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[700],
+                    )
+                  : StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('garbage_reports')
+                          .where('reportedBy', isEqualTo: user.uid)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Color(0xFF00A86B),
+                            ),
+                          );
+                        }
+
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Error: ${snapshot.error}',
+                              style: const TextStyle(
+                                color: Colors.red,
+                                fontSize: 14,
+                              ),
+                            ),
+                          );
+                        }
+
+                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                          return const Center(
+                            child: Text(
+                              'No activities yet',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 14,
+                              ),
+                            ),
+                          );
+                        }
+
+                        // Sort in memory instead of using Firestore orderBy
+                        final activities = snapshot.data!.docs.toList();
+                        activities.sort((a, b) {
+                          final aData = a.data() as Map<String, dynamic>;
+                          final bData = b.data() as Map<String, dynamic>;
+                          final aTimestamp = aData['timestamp'] as Timestamp?;
+                          final bTimestamp = bData['timestamp'] as Timestamp?;
+
+                          if (aTimestamp == null && bTimestamp == null)
+                            return 0;
+                          if (aTimestamp == null) return 1;
+                          if (bTimestamp == null) return -1;
+
+                          return bTimestamp
+                              .compareTo(aTimestamp); // descending order
+                        });
+
+                        // Limit to 10 most recent
+                        final recentActivities = activities.take(10).toList();
+
+                        return ListView.separated(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: recentActivities.length,
+                          separatorBuilder: (context, index) =>
+                              const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final activity = recentActivities[index];
+                            final data =
+                                activity.data() as Map<String, dynamic>;
+                            final status = data['status'] as String;
+                            final timestamp = data['timestamp'] as Timestamp?;
+                            final date = timestamp?.toDate();
+                            final reportId = activity.id;
+
+                            // Format trash ID
+                            final trashId = reportId
+                                .substring(reportId.length - 4)
+                                .toUpperCase();
+
+                            // Determine icon and label based on status
+                            IconData icon;
+                            String label;
+                            Color iconColor;
+
+                            if (status == 'collected') {
+                              icon = Icons.check_circle;
+                              label = 'Trash Pickup';
+                              iconColor = const Color(0xFF00A86B);
+                            } else if (status == 'pending') {
+                              icon = Icons.delete_outline;
+                              label = 'Trash Threw';
+                              iconColor = Colors.orange;
+                            } else {
+                              icon = Icons.cancel;
+                              label = 'Cancelled';
+                              iconColor = Colors.red;
+                            }
+
+                            final isSelected = _selectedActivityId == reportId;
+
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (_selectedActivityId == reportId) {
+                                    _selectedActivityId = null;
+                                  } else {
+                                    _selectedActivityId = reportId;
+                                  }
+                                });
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 12, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? const Color(0xFF00A86B).withOpacity(0.1)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    // Icon
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: iconColor.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        icon,
+                                        color: iconColor,
+                                        size: 24,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    // Details
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            label,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          if (date != null)
+                                            Text(
+                                              DateFormat('MMMM dd, yyyy')
+                                                  .format(date),
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Time and ID
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        if (date != null)
+                                          Text(
+                                            DateFormat('h:mm a').format(date),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Trash ID: $trashId',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey[600],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(width: 8),
+                                    // Selection indicator
+                                    if (isSelected)
+                                      const Icon(
+                                        Icons.radio_button_checked,
+                                        color: Color(0xFF00A86B),
+                                        size: 20,
+                                      )
+                                    else
+                                      Icon(
+                                        Icons.radio_button_unchecked,
+                                        color: Colors.grey[400],
+                                        size: 20,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(Icons.access_time,
-                          size: 16, color: Colors.grey[600]),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Last Date Collected: Yesterday',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
             ),
 
             const SizedBox(height: 24),

@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async';
 import 'dart:io';
 import '../services/firestore_service.dart';
+import '../services/location_service.dart';
 
 class UserMapScreen extends StatefulWidget {
   final bool autoStartPinning;
@@ -20,9 +21,9 @@ class UserMapScreen extends StatefulWidget {
 
 class _UserMapScreenState extends State<UserMapScreen> {
   late final MapController _mapController;
-  LatLng _initialCenter = LatLng(37.7749, -122.4194);
-  final double _initialZoom = 16.0;
-  bool _isLoadingLocation = true;
+  late LatLng _initialCenter;
+  late double _initialZoom;
+  bool _isLoadingLocation = false;
   String? _locationError;
 
   // Pin placement
@@ -40,69 +41,31 @@ class _UserMapScreenState extends State<UserMapScreen> {
   void initState() {
     super.initState();
     _mapController = MapController();
-    _getCurrentLocation();
+
+    // Use LocationService to get map center (remembers last position)
+    _initialCenter = LocationService().getMapCenter();
+    _initialZoom = LocationService().savedZoom;
+    _isLoadingLocation = !LocationService().isInitialized;
+
+    if (!LocationService().isInitialized) {
+      _initializeLocation();
+    }
+
     _loadUserTrashReports();
 
     if (widget.autoStartPinning) {
-      Future.delayed(const Duration(milliseconds: 800), () {
+      Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) _startPinning();
       });
     }
   }
 
-  @override
-  void dispose() {
-    _pinLockTimer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _getCurrentLocation() async {
+  Future<void> _initializeLocation() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (mounted) {
-          setState(() {
-            _isLoadingLocation = false;
-            _locationError =
-                'Location services are disabled. Please enable them in your device settings.';
-          });
-        }
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (mounted) {
-            setState(() {
-              _isLoadingLocation = false;
-              _locationError =
-                  'Location permissions are denied. Please grant location access.';
-            });
-          }
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        if (mounted) {
-          setState(() {
-            _isLoadingLocation = false;
-            _locationError =
-                'Location permissions are permanently denied. Please enable them in app settings.';
-          });
-        }
-        return;
-      }
-
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.bestForNavigation,
-      );
-
+      await LocationService().initializeLocation();
       if (mounted) {
         setState(() {
-          _initialCenter = LatLng(position.latitude, position.longitude);
+          _initialCenter = LocationService().getMapCenter();
           _isLoadingLocation = false;
         });
       }
@@ -113,8 +76,23 @@ class _UserMapScreenState extends State<UserMapScreen> {
           _locationError = 'Error getting location: ${e.toString()}';
         });
       }
-      print('Location error: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    // Save current map position before disposing (only if map is initialized)
+    try {
+      final center = _mapController.camera.center;
+      final zoom = _mapController.camera.zoom;
+      LocationService().saveMapPosition(center, zoom);
+    } catch (e) {
+      // Map controller not fully initialized, skip saving position
+      print('Could not save map position: $e');
+    }
+
+    _pinLockTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadUserTrashReports() async {
@@ -520,9 +498,23 @@ class _UserMapScreenState extends State<UserMapScreen> {
                             );
 
                             if (!mounted) return;
-                            Navigator.pop(context); // Close modal
-                            Navigator.pop(context); // Go back to home
-                            _showSuccessDialog();
+
+                            // Close the modal first
+                            if (Navigator.canPop(context)) {
+                              Navigator.pop(context);
+                            }
+
+                            // Show success dialog and wait for it to close
+                            await showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (dialogContext) => const SuccessDialog(),
+                            );
+
+                            // After dialog closes, navigate back to home
+                            if (mounted && Navigator.canPop(context)) {
+                              Navigator.pop(context);
+                            }
                           } catch (e) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Error: $e')),
@@ -554,16 +546,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
         ),
       ),
     );
-  }
-
-  void _showSuccessDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const SuccessDialog(),
-    ).then((_) {
-      // Dialog dismissed
-    });
   }
 
   void _showTrashDetailsForRemoval(GarbageReport report) {
@@ -776,7 +758,12 @@ class _UserMapScreenState extends State<UserMapScreen> {
   void _centerOnUserLocation() {
     if (!_isLoadingLocation) {
       try {
-        _mapController.move(_initialCenter, _initialZoom);
+        // Reset saved position and go to current location
+        LocationService().resetToCurrentLocation();
+        final currentLocation = LocationService().currentLocation;
+        if (currentLocation != null) {
+          _mapController.move(currentLocation, _initialZoom);
+        }
       } catch (e) {
         print('Error centering map: $e');
       }
@@ -831,7 +818,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                       _isLoadingLocation = true;
                       _locationError = null;
                     });
-                    _getCurrentLocation();
+                    _initializeLocation();
                   },
                   icon: const Icon(Icons.refresh),
                   label: const Text('Retry'),

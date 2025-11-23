@@ -24,7 +24,7 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
   bool _showRoute = false;
   double _totalDistance = 0.0;
   double _totalDuration = 0.0;
-  
+
   // Live tracking
   StreamSubscription<Position>? _positionStreamSubscription;
   bool _isFollowing = true;
@@ -35,6 +35,7 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
     super.initState();
     _startLiveLocationTracking();
     _loadGarbageLocations();
+    _listenToGarbageLocations();
   }
 
   @override
@@ -96,7 +97,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
     }
   }
 
-  Future<void> _updateCollectorLocation(double latitude, double longitude) async {
+  Future<void> _updateCollectorLocation(
+      double latitude, double longitude) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
@@ -142,6 +144,37 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
     }
   }
 
+  void _listenToGarbageLocations() {
+    FirebaseFirestore.instance
+        .collection('garbage_reports')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen((snapshot) {
+      final locations = snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': doc.id,
+          'lat': data['latitude'] as double,
+          'lng': data['longitude'] as double,
+          'address': data['address'] as String,
+          'issueType': data['issueType'] as String?,
+          'description': data['description'] as String?,
+        };
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _garbageLocations = locations;
+        });
+
+        // Auto-recalculate route if it was showing
+        if (_showRoute && locations.isNotEmpty) {
+          _calculateRoute();
+        }
+      }
+    });
+  }
+
   Future<void> _calculateRoute() async {
     if (_garbageLocations.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -179,11 +212,13 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        
-        if (data['code'] == 'Ok' && data['routes'] != null && data['routes'].isNotEmpty) {
+
+        if (data['code'] == 'Ok' &&
+            data['routes'] != null &&
+            data['routes'].isNotEmpty) {
           final route = data['routes'][0];
           final geometry = route['geometry']['coordinates'] as List;
-          
+
           final routePoints = geometry.map((coord) {
             return LatLng(coord[1] as double, coord[0] as double);
           }).toList();
@@ -309,7 +344,7 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.binsync',
               ),
-              
+
               // Route polyline
               if (_showRoute && _routePoints.isNotEmpty)
                 PolylineLayer(
@@ -361,7 +396,7 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                       ],
                     ),
                   ),
-                  
+
                   // Garbage markers (rotate: false to prevent rotation with map)
                   ..._garbageLocations.map((location) {
                     return Marker(
@@ -489,7 +524,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor:
+                                  AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
                           )
                         : const Icon(Icons.route),
@@ -509,7 +545,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 16, horizontal: 20),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -600,7 +637,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                 ),
               ],
             ),
-            if (location['description'] != null && location['description'].isNotEmpty) ...[
+            if (location['description'] != null &&
+                location['description'].isNotEmpty) ...[
               const SizedBox(height: 16),
               const Text(
                 'Description:',
@@ -634,7 +672,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       side: const BorderSide(color: Color(0xFF00A86B)),
                     ),
-                    icon: const Icon(Icons.location_on, color: Color(0xFF00A86B)),
+                    icon:
+                        const Icon(Icons.location_on, color: Color(0xFF00A86B)),
                     label: const Text(
                       'View on Map',
                       style: TextStyle(color: Color(0xFF00A86B)),
@@ -671,15 +710,15 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
         .collection('garbage_reports')
         .doc(reportId)
         .get();
-    
+
     if (!reportDoc.exists) return;
-    
+
     final reportData = reportDoc.data() as Map<String, dynamic>;
     final reportedBy = reportData['reportedBy'] as String?;
     final address = reportData['address'] as String?;
-    
+
     if (!mounted) return;
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -694,7 +733,7 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
             onPressed: () async {
               try {
                 final collectorId = FirebaseAuth.instance.currentUser?.uid;
-                
+
                 // Update report status
                 await FirebaseFirestore.instance
                     .collection('garbage_reports')
@@ -712,7 +751,8 @@ class _CollectorMapScreenState extends State<CollectorMapScreen> {
                       .add({
                     'userId': reportedBy,
                     'title': 'Garbage Collected! ✅',
-                    'message': 'Your garbage report at $address has been collected.',
+                    'message':
+                        'Your garbage report at $address has been collected.',
                     'type': 'collection',
                     'reportId': reportId,
                     'timestamp': FieldValue.serverTimestamp(),

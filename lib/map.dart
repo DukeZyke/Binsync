@@ -5,7 +5,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'dart:async';
 import 'package:binsync/services/firestore_service.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -30,23 +29,16 @@ class _MapScreenState extends State<MapScreen> {
   String _locationText = '';
   Timer? _pinLockTimer;
   final FirestoreService _firestoreService = FirestoreService();
-  
-  // Garbage truck tracking
-  List<Map<String, dynamic>> _activeCollectors = [];
-  StreamSubscription<QuerySnapshot>? _collectorsSubscription;
-
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
     _getCurrentLocation();
-    _loadActiveCollectors();
   }
 
   @override
   void dispose() {
     _pinLockTimer?.cancel();
-    _collectorsSubscription?.cancel();
     super.dispose();
   }
 
@@ -120,26 +112,6 @@ class _MapScreenState extends State<MapScreen> {
         });
       }
     }
-  }
-
-  void _loadActiveCollectors() {
-    _collectorsSubscription = FirebaseFirestore.instance
-        .collection('active_collectors')
-        .snapshots()
-        .listen((snapshot) {
-      if (mounted) {
-        setState(() {
-          _activeCollectors = snapshot.docs.map((doc) {
-            final data = doc.data();
-            return {
-              'latitude': data['latitude'] as double,
-              'longitude': data['longitude'] as double,
-              'userId': data['userId'] as String,
-            };
-          }).toList();
-        });
-      }
-    });
   }
 
   void _startPinning() {
@@ -400,25 +372,6 @@ class _MapScreenState extends State<MapScreen> {
                               'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                           userAgentPackageName: 'com.example.binsync',
                           maxZoom: 19,
-                        ),
-                        // Garbage truck markers
-                        MarkerLayer(
-                          markers: _activeCollectors.map((collector) {
-                            return Marker(
-                              point: LatLng(
-                                collector['latitude'] as double,
-                                collector['longitude'] as double,
-                              ),
-                              width: 40,
-                              height: 40,
-                              rotate: false, // Don't rotate with map
-                              child: const Icon(
-                                Icons.local_shipping,
-                                color: Color(0xFF00A86B),
-                                size: 40,
-                              ),
-                            );
-                          }).toList(),
                         ),
                       ],
                     ),

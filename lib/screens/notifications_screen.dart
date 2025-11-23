@@ -68,22 +68,42 @@ class NotificationsScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             itemCount: notifications.length,
             itemBuilder: (context, index) {
-              final notification = notifications[index].data() as Map<String, dynamic>;
+              final notification =
+                  notifications[index].data() as Map<String, dynamic>;
               final notificationId = notifications[index].id;
               final title = notification['title'] as String? ?? 'Notification';
               final message = notification['message'] as String? ?? '';
               final isRead = notification['read'] as bool? ?? false;
               final timestamp = notification['timestamp'] as Timestamp?;
               final date = timestamp?.toDate();
+              final type = notification['type'] as String? ?? '';
+
+              // Determine icon based on notification type
+              IconData icon;
+              Color iconColor;
+              if (type == 'pickup_reminder') {
+                icon = Icons.notifications_active;
+                iconColor = Colors.blue;
+              } else if (type == 'garbage_collected') {
+                icon = Icons.check_circle;
+                iconColor = const Color(0xFF00A86B);
+              } else {
+                icon = Icons.info;
+                iconColor = Colors.grey;
+              }
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 elevation: isRead ? 1 : 3,
-                color: isRead ? Colors.white : const Color(0xFF00A86B).withOpacity(0.05),
+                color: isRead
+                    ? Colors.white
+                    : const Color(0xFF00A86B).withOpacity(0.05),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: BorderSide(
-                    color: isRead ? Colors.grey[300]! : const Color(0xFF00A86B).withOpacity(0.3),
+                    color: isRead
+                        ? Colors.grey[300]!
+                        : const Color(0xFF00A86B).withOpacity(0.3),
                     width: isRead ? 1 : 2,
                   ),
                 ),
@@ -107,12 +127,12 @@ class NotificationsScreen extends StatelessWidget {
                           width: 48,
                           height: 48,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF00A86B).withOpacity(0.1),
+                            color: iconColor.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
-                            Icons.check_circle,
-                            color: Color(0xFF00A86B),
+                          child: Icon(
+                            icon,
+                            color: iconColor,
                             size: 28,
                           ),
                         ),
@@ -128,7 +148,9 @@ class NotificationsScreen extends StatelessWidget {
                                       title,
                                       style: TextStyle(
                                         fontSize: 16,
-                                        fontWeight: isRead ? FontWeight.w500 : FontWeight.bold,
+                                        fontWeight: isRead
+                                            ? FontWeight.w500
+                                            : FontWeight.bold,
                                         color: Colors.black87,
                                       ),
                                     ),

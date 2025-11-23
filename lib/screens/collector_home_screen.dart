@@ -178,9 +178,12 @@ class CollectorHomeScreen extends StatelessWidget {
                       ListView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: pendingReports.length > 5 ? 5 : pendingReports.length,
+                        itemCount: pendingReports.length > 5
+                            ? 5
+                            : pendingReports.length,
                         itemBuilder: (context, index) {
-                          final report = pendingReports[index].data() as Map<String, dynamic>;
+                          final report = pendingReports[index].data()
+                              as Map<String, dynamic>;
                           final reportId = pendingReports[index].id;
                           final timestamp = report['timestamp'] as Timestamp?;
                           final date = timestamp?.toDate();
@@ -197,7 +200,8 @@ class CollectorHomeScreen extends StatelessWidget {
                                 width: 48,
                                 height: 48,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF00A86B).withOpacity(0.1),
+                                  color:
+                                      const Color(0xFF00A86B).withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: const Icon(
@@ -238,7 +242,8 @@ class CollectorHomeScreen extends StatelessWidget {
                                   color: Color(0xFF00A86B),
                                 ),
                                 onPressed: () {
-                                  _markAsCollected(context, reportId, user?.uid);
+                                  _markAsCollected(
+                                      context, reportId, user?.uid);
                                 },
                               ),
                             ),
@@ -255,7 +260,8 @@ class CollectorHomeScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+      String label, String value, IconData icon, Color color) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -306,7 +312,8 @@ class CollectorHomeScreen extends StatelessWidget {
     }
   }
 
-  void _markAsCollected(BuildContext context, String reportId, String? collectorId) {
+  void _markAsCollected(
+      BuildContext context, String reportId, String? collectorId) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(

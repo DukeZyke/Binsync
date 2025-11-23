@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:binsync/services/fcm_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -44,6 +45,9 @@ class AuthService {
         String userType = userDoc.get('userType');
         await saveUserType(userType);
       }
+
+      // Save FCM token after successful login
+      FCMService().saveFCMTokenForCurrentUser();
 
       return userCredential;
     } on FirebaseAuthException catch (e) {
@@ -139,6 +143,9 @@ class AuthService {
       });
 
       await saveUserType(userType);
+
+      // Save FCM token after creating user account
+      FCMService().saveFCMTokenForCurrentUser();
     } catch (e) {
       throw 'Failed to save user data: ${e.toString()}';
     }

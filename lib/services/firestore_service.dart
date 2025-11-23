@@ -60,6 +60,20 @@ class FirestoreService {
     });
   }
 
+  // Get user's own reports (exclude collected ones - auto-remove when picked up)
+  Stream<List<GarbageReport>> getUserReports(String userId) {
+    return _db
+        .collection('garbage_reports')
+        .where('reportedBy', isEqualTo: userId)
+        .where('status', isEqualTo: 'pending') // Only show pending trash
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        return GarbageReport.fromFirestore(doc);
+      }).toList();
+    });
+  }
+
   // Update report status
   Future<void> updateReportStatus(String reportId, String status) async {
     try {
@@ -92,6 +106,8 @@ class GarbageReport {
   final DateTime? timestamp;
   final String status;
   final String? collectorId;
+  final String description;
+  final String? photoPath;
 
   GarbageReport({
     required this.id,
@@ -102,6 +118,8 @@ class GarbageReport {
     this.timestamp,
     required this.status,
     this.collectorId,
+    this.description = '',
+    this.photoPath,
   });
 
   // Create from Firestore document
@@ -118,6 +136,8 @@ class GarbageReport {
           : null,
       status: data['status'] ?? 'pending',
       collectorId: data['collectorId'],
+      description: data['description'] ?? '',
+      photoPath: data['photoPath'],
     );
   }
 

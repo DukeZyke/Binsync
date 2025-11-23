@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:binsync/map.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,13 +7,26 @@ import 'screens/login_screen.dart';
 import 'screens/report_screen.dart';
 import 'screens/collector_main_screen.dart';
 import 'screens/notifications_screen.dart';
+import 'screens/pickup_schedule_screen.dart';
+import 'screens/user_map_screen.dart';
 import 'services/auth_service.dart';
+import 'services/fcm_service.dart';
+import 'services/notification_scheduler.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Initialize FCM in background (don't block app startup)
+  FCMService().initialize().catchError((error) {
+    print('FCM initialization error: $error');
+  });
+
+  // Start notification scheduler
+  NotificationScheduler().startScheduler();
+
   runApp(const BinsyncApp());
 }
 
@@ -72,7 +84,8 @@ class BinsyncApp extends StatelessWidget {
 
               // Check user type
               if (userSnapshot.hasData && userSnapshot.data!.exists) {
-                final userData = userSnapshot.data!.data() as Map<String, dynamic>;
+                final userData =
+                    userSnapshot.data!.data() as Map<String, dynamic>;
                 final userType = userData['userType'] as String?;
 
                 if (userType == 'collector') {
@@ -103,7 +116,7 @@ class _MainScreenState extends State<MainScreen> {
   // List of screens for navigation
   final List<Widget> _screens = const [
     HomeScreen(),
-    MapScreen(),
+    UserMapScreen(),
     ReportScreen(),
     StatsScreen(),
   ];
@@ -172,21 +185,25 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final authService = AuthService();
     final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
         backgroundColor: const Color(0xFF00A86B),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: Colors.white),
+          onPressed: () {},
+        ),
         title: const Text(
-          'Binsync',
+          'BinSync',
           style: TextStyle(
             color: Colors.white,
             fontSize: 20,
             fontWeight: FontWeight.w600,
           ),
         ),
-        centerTitle: true,
         actions: [
           // Notification bell with badge
           StreamBuilder<QuerySnapshot>(
@@ -197,11 +214,12 @@ class HomeScreen extends StatelessWidget {
                 .snapshots(),
             builder: (context, snapshot) {
               final unreadCount = snapshot.data?.docs.length ?? 0;
-              
+
               return Stack(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.notifications, color: Colors.white),
+                    icon: const Icon(Icons.notifications_outlined,
+                        color: Colors.white),
                     onPressed: () {
                       Navigator.push(
                         context,
@@ -240,45 +258,617 @@ class HomeScreen extends StatelessWidget {
               );
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () async {
-              await authService.signOut();
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Location Card
+              _buildLocationCard(),
+              const SizedBox(height: 16),
+
+              // Upcoming Schedule
+              _buildUpcomingSchedule(context),
+              const SizedBox(height: 16),
+
+              // Manage Schedule Button
+              _buildManageScheduleButton(context),
+              const SizedBox(height: 16),
+
+              // Add Trash Button
+              _buildAddTrashButton(context),
+              const SizedBox(height: 16),
+
+              // Statistics Cards
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('garbage_reports')
+                    .where('reportedBy', isEqualTo: user?.uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const SizedBox();
+                  }
+
+                  final reports = snapshot.data!.docs;
+                  // Only count reports that still exist (not deleted)
+                  final activeReports = reports
+                      .where((doc) =>
+                          doc['status'] != null && doc['status'] != 'deleted')
+                      .toList();
+
+                  final totalPickup = activeReports
+                      .where((doc) => doc['status'] == 'collected')
+                      .length;
+                  final totalThrew = activeReports.length; // All active reports
+
+                  return _buildStatistics(totalPickup, totalThrew);
+                },
+              ),
+              const SizedBox(height: 16),
+
+              // Recent Activity
+              _buildRecentActivity(user?.uid),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLocationCard() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.location_on, color: Color(0xFF00A86B), size: 20),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'City Proper, Iloilo City (Truck ID: 0005)',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUpcomingSchedule(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.calendar_today,
+                  color: Color(0xFF00A86B), size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Your Pickup Schedule',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const PickupScheduleScreen(),
+                    ),
+                  );
+                },
+                child: const Text(
+                  'Manage',
+                  style: TextStyle(color: Color(0xFF00A86B)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('pickup_schedules')
+                .where('userId', isEqualTo: user?.uid)
+                .where('isActive', isEqualTo: true)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF00A86B),
+                    ),
+                  ),
+                );
+              }
+
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text(
+                    'Error: ${snapshot.error}',
+                    style: const TextStyle(color: Colors.red, fontSize: 12),
+                  ),
+                );
+              }
+
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                return Column(
+                  children: [
+                    Text(
+                      'No pickup schedules yet',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const PickupScheduleScreen(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('Add Schedule'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00A86B),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              final schedules = snapshot.data!.docs.take(3).toList();
+              return Column(
+                children: schedules.asMap().entries.map((entry) {
+                  final schedule = entry.value.data() as Map<String, dynamic>;
+                  final day = schedule['day'] as String;
+                  final time = schedule['time'] as String?;
+
+                  return Column(
+                    children: [
+                      if (entry.key > 0) const Divider(height: 24),
+                      _buildScheduleItem(
+                        'Garbage Collection',
+                        day,
+                        time ?? 'All day',
+                      ),
+                    ],
+                  );
+                }).toList(),
+              );
             },
           ),
         ],
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+    );
+  }
+
+  Widget _buildScheduleItem(String title, String day, String time) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00A86B).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.access_time, color: Color(0xFF00A86B)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.delete_outline,
-                size: 100,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Welcome to Binsync',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Track and manage garbage collection efficiently',
-                textAlign: TextAlign.center,
+              Text(
+                day,
                 style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey,
+                  fontSize: 12,
+                  color: Colors.grey[600],
                 ),
               ),
             ],
           ),
         ),
+        Text(
+          time,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF00A86B),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildManageScheduleButton(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue[200]!),
+      ),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const PickupScheduleScreen(),
+            ),
+          );
+        },
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.blue,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.notifications_active,
+                  color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Pickup Day Notifications',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    'Set up automatic reminders for pickup days',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.blue),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAddTrashButton(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: 56,
+      decoration: BoxDecoration(
+        color: const Color(0xFF00A86B),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF00A86B).withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: () {
+          // Navigate to map screen with auto-pinning enabled
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const UserMapScreen(autoStartPinning: true),
+            ),
+          );
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.add, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              'Add Trash',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatistics(int totalPickup, int totalThrew) {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Total Trash Pick-up:',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF00A86B),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  totalPickup.toString(),
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF00A86B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Total Trash Threw:',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.orange,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  totalThrew.toString(),
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRecentActivity(String? userId) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history, color: Color(0xFF00A86B), size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Recent Activity',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('garbage_reports')
+                .where('reportedBy', isEqualTo: userId)
+                .orderBy('timestamp', descending: true)
+                .limit(10)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'No recent activity',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                );
+              }
+
+              final activities = snapshot.data!.docs;
+
+              return ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: activities.length,
+                separatorBuilder: (context, index) => const Divider(height: 24),
+                itemBuilder: (context, index) {
+                  final activity =
+                      activities[index].data() as Map<String, dynamic>;
+                  final status = activity['status'] as String;
+                  final timestamp = activity['timestamp'] as Timestamp?;
+                  final date = timestamp?.toDate();
+
+                  final isPickup = status == 'collected';
+                  final icon = isPickup ? Icons.check_circle : Icons.delete;
+                  final color =
+                      isPickup ? const Color(0xFF00A86B) : Colors.orange;
+                  final bgColor = isPickup
+                      ? const Color(0xFF00A86B).withOpacity(0.1)
+                      : Colors.orange.withOpacity(0.1);
+                  final title = isPickup ? 'Trash Pick-up' : 'Trash Threw';
+                  final badge = isPickup ? '+1 Pick-up' : '+1 Trash';
+                  final badgeColor =
+                      isPickup ? const Color(0xFF00A86B) : Colors.orange;
+
+                  return Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: bgColor,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(icon, color: color, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            if (date != null)
+                              Text(
+                                '${date.month}/${date.day}/${date.year}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (date != null)
+                            Text(
+                              '${date.hour}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: badgeColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              badge,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: badgeColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ],
       ),
     );
   }

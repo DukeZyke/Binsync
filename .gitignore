@@ -94,3 +94,15 @@ coverage/
 
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
+
+# Signing keys - DO NOT COMMIT
+*.jks
+*.keystore
+key.properties
+android/key.properties
+android/app/*.jks
+
+# Android/Gradle
+android/.gradle/
+android/local.properties
+android/app/.cxx/

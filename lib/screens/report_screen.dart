@@ -3,10 +3,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../services/firestore_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:flutter_map/flutter_map.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -22,10 +26,12 @@ class _ReportScreenState extends State<ReportScreen> {
 
   String? _selectedIssue;
   String _locationText = 'Getting location...';
-  Position? _currentPosition;
+  Position? _currentPosition; // This will be the snapped position
+  Position? _originalPosition; // User's actual GPS location
   File? _imageFile;
   bool _isSubmitting = false;
   String? _selectedActivityId;
+  bool _wasSnapped = false; // Track if location was snapped
 
   final List<Map<String, dynamic>> _issueTypes = [
     {
@@ -85,24 +91,183 @@ class _ReportScreenState extends State<ReportScreen> {
         desiredAccuracy: LocationAccuracy.high,
       );
 
-      List<Placemark> placemarks = await placemarkFromCoordinates(
+      // Store original position
+      _originalPosition = position;
+
+      // Snap location to nearest road/route
+      final snappedPosition = await _snapToNearestRoad(position);
+
+      // Check if position was actually snapped to a collector route
+      final snappedToRoute = await _checkIfNearCollectorRoute(snappedPosition);
+
+      // Check if position was actually snapped
+      final distanceFromOriginal = Geolocator.distanceBetween(
         position.latitude,
         position.longitude,
+        snappedPosition.latitude,
+        snappedPosition.longitude,
+      );
+
+      _wasSnapped = distanceFromOriginal > 5; // Snapped if moved more than 5m
+
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        snappedPosition.latitude,
+        snappedPosition.longitude,
       );
 
       if (placemarks.isNotEmpty) {
         Placemark place = placemarks[0];
         setState(() {
-          _currentPosition = position;
+          _currentPosition = snappedPosition;
           _locationText =
               '${place.street ?? ''}, ${place.locality ?? ''}, ${place.subAdministrativeArea ?? ''}';
         });
+
+        // Show visual confirmation if location was snapped
+        if (_wasSnapped && mounted) {
+          _showLocationSnapDialog();
+        } else if (!snappedToRoute && mounted) {
+          // Warn user if not near any collector route
+          _showNotNearRouteWarning();
+        }
       }
     } catch (e) {
       setState(() {
         _locationText = 'Failed to get location';
       });
     }
+  }
+
+  Future<Position> _snapToNearestRoad(Position position) async {
+    try {
+      // First, try to snap to nearest collector route
+      final snappedToRoute = await _snapToNearestCollectorRoute(position);
+      if (snappedToRoute != null) {
+        print('✅ Snapped to collector route');
+        return snappedToRoute;
+      }
+
+      // Fallback: Use OSRM nearest API to snap to nearest road
+      final url =
+          'https://router.project-osrm.org/nearest/v1/driving/${position.longitude},${position.latitude}';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['code'] == 'Ok' &&
+            data['waypoints'] != null &&
+            data['waypoints'].isNotEmpty) {
+          final snappedLocation = data['waypoints'][0]['location'];
+          final snappedLng = snappedLocation[0] as double;
+          final snappedLat = snappedLocation[1] as double;
+
+          // Return snapped position
+          return Position(
+            latitude: snappedLat,
+            longitude: snappedLng,
+            timestamp: position.timestamp,
+            accuracy: position.accuracy,
+            altitude: position.altitude,
+            heading: position.heading,
+            speed: position.speed,
+            speedAccuracy: position.speedAccuracy,
+            altitudeAccuracy: position.altitudeAccuracy,
+            headingAccuracy: position.headingAccuracy,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error snapping to road: $e');
+    }
+
+    // Return original position if snapping fails
+    return position;
+  }
+
+  Future<Position?> _snapToNearestCollectorRoute(Position position) async {
+    try {
+      // Get all collector routes
+      final routesSnapshot =
+          await FirebaseFirestore.instance.collection('collector_routes').get();
+
+      if (routesSnapshot.docs.isEmpty) return null;
+
+      Position? nearestPoint;
+      double minDistance = double.infinity;
+      const Distance distanceCalc = Distance();
+
+      // Check all routes
+      for (var routeDoc in routesSnapshot.docs) {
+        final routeData = routeDoc.data();
+        final routePoints = (routeData['routePoints'] as List?)
+            ?.map((p) =>
+                LatLng(p['latitude'] as double, p['longitude'] as double))
+            .toList();
+
+        if (routePoints == null || routePoints.isEmpty) continue;
+
+        final userPoint = LatLng(position.latitude, position.longitude);
+
+        // Find nearest point on this route
+        for (int i = 0; i < routePoints.length - 1; i++) {
+          final segmentStart = routePoints[i];
+          final segmentEnd = routePoints[i + 1];
+
+          // Find closest point on line segment
+          final closestPoint =
+              _getClosestPointOnSegment(userPoint, segmentStart, segmentEnd);
+          final distance =
+              distanceCalc.as(LengthUnit.Meter, userPoint, closestPoint);
+
+          if (distance < minDistance && distance <= 35) {
+            // Within 35m
+            minDistance = distance;
+            nearestPoint = Position(
+              latitude: closestPoint.latitude,
+              longitude: closestPoint.longitude,
+              timestamp: position.timestamp,
+              accuracy: position.accuracy,
+              altitude: position.altitude,
+              heading: position.heading,
+              speed: position.speed,
+              speedAccuracy: position.speedAccuracy,
+              altitudeAccuracy: position.altitudeAccuracy,
+              headingAccuracy: position.headingAccuracy,
+            );
+          }
+        }
+      }
+
+      return nearestPoint;
+    } catch (e) {
+      debugPrint('Error snapping to collector route: $e');
+      return null;
+    }
+  }
+
+  LatLng _getClosestPointOnSegment(
+      LatLng point, LatLng lineStart, LatLng lineEnd) {
+    // Vector from start to end
+    final dx = lineEnd.longitude - lineStart.longitude;
+    final dy = lineEnd.latitude - lineStart.latitude;
+
+    // If start and end are the same, return start
+    if (dx == 0 && dy == 0) return lineStart;
+
+    // Parameter t of the projection onto the line
+    final t = ((point.longitude - lineStart.longitude) * dx +
+            (point.latitude - lineStart.latitude) * dy) /
+        (dx * dx + dy * dy);
+
+    // Clamp t to [0, 1] to stay on the segment
+    final tClamped = t.clamp(0.0, 1.0);
+
+    // Calculate closest point
+    return LatLng(
+      lineStart.latitude + tClamped * dy,
+      lineStart.longitude + tClamped * dx,
+    );
   }
 
   Future<void> _takePhoto() async {
@@ -264,6 +429,198 @@ class _ReportScreenState extends State<ReportScreen> {
         setState(() => _isSubmitting = false);
       }
     }
+  }
+
+  void _showLocationSnapDialog() {
+    if (_originalPosition == null || _currentPosition == null) return;
+
+    final distance = Geolocator.distanceBetween(
+      _originalPosition!.latitude,
+      _originalPosition!.longitude,
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+    ).round();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: const [
+            Icon(Icons.location_on, color: Color(0xFF00A86B)),
+            SizedBox(width: 8),
+            Text('Location Adjusted'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Your trash report location has been automatically adjusted to the nearest collector route ($distance meters away).',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: LatLng(
+                    _currentPosition!.latitude,
+                    _currentPosition!.longitude,
+                  ),
+                  initialZoom: 16.0,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                  ),
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.example.binsync',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      // Original position (blue)
+                      Marker(
+                        point: LatLng(
+                          _originalPosition!.latitude,
+                          _originalPosition!.longitude,
+                        ),
+                        width: 40,
+                        height: 40,
+                        alignment: const Alignment(0.0, -0.9),
+                        child: const Icon(
+                          Icons.person_pin_circle,
+                          color: Colors.blue,
+                          size: 40,
+                        ),
+                      ),
+                      // Snapped position (green)
+                      Marker(
+                        point: LatLng(
+                          _currentPosition!.latitude,
+                          _currentPosition!.longitude,
+                        ),
+                        width: 40,
+                        height: 40,
+                        alignment: const Alignment(0.0, -0.9),
+                        child: const Icon(
+                          Icons.location_on,
+                          color: Color(0xFF00A86B),
+                          size: 40,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.person_pin_circle,
+                    color: Colors.blue, size: 20),
+                const SizedBox(width: 4),
+                const Text('Your location', style: TextStyle(fontSize: 12)),
+                const SizedBox(width: 16),
+                const Icon(Icons.location_on,
+                    color: Color(0xFF00A86B), size: 20),
+                const SizedBox(width: 4),
+                const Text('Adjusted location', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'OK, Got it!',
+              style: TextStyle(
+                color: Color(0xFF00A86B),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _checkIfNearCollectorRoute(Position position) async {
+    try {
+      final routesSnapshot =
+          await FirebaseFirestore.instance.collection('collector_routes').get();
+
+      if (routesSnapshot.docs.isEmpty) return false;
+
+      const Distance distanceCalc = Distance();
+      final userPoint = LatLng(position.latitude, position.longitude);
+
+      for (var routeDoc in routesSnapshot.docs) {
+        final routeData = routeDoc.data();
+        final routePoints = (routeData['routePoints'] as List?)
+            ?.map((p) =>
+                LatLng(p['latitude'] as double, p['longitude'] as double))
+            .toList();
+
+        if (routePoints == null || routePoints.isEmpty) continue;
+
+        for (int i = 0; i < routePoints.length - 1; i++) {
+          final closestPoint = _getClosestPointOnSegment(
+            userPoint,
+            routePoints[i],
+            routePoints[i + 1],
+          );
+          final distance =
+              distanceCalc.as(LengthUnit.Meter, userPoint, closestPoint);
+
+          if (distance <= 35) {
+            return true; // Within 35m of a route
+          }
+        }
+      }
+
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  void _showNotNearRouteWarning() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Not Near Collection Route'),
+          ],
+        ),
+        content: const Text(
+          'Your location is not within 35 meters of any collector route. '
+          'This trash may not be collected. Consider moving closer to a main road or street.',
+          style: TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'OK',
+              style:
+                  TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<bool> _showConfirmationDialog() async {
@@ -691,6 +1048,40 @@ class _ReportScreenState extends State<ReportScreen> {
                         );
                       },
                     ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Location tip banner
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00A86B).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFF00A86B).withOpacity(0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    color: Color(0xFF00A86B),
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Your location is automatically snapped to the nearest road to help collectors find the garbage easily.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey[800],
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 24),

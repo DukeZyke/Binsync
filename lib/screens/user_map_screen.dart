@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import 'dart:io';
 import '../services/firestore_service.dart';
@@ -32,6 +33,8 @@ class _UserMapScreenState extends State<UserMapScreen> {
   String _pinnedAddress = '';
   Timer? _pinLockTimer;
   bool _showDoneButton = false;
+  LatLng? _snappedLocation; // The location snapped to nearest route
+  bool _isNearRoute = false; // Whether current location is near a route
 
   // User's trash reports
   List<GarbageReport> _userTrashReports = [];
@@ -126,7 +129,92 @@ class _UserMapScreenState extends State<UserMapScreen> {
       _pinLockTimer = Timer(const Duration(milliseconds: 800), () {
         _lockPin();
       });
+
+      // Check if location will snap to a route
+      _checkIfNearRoute();
     }
+  }
+
+  Future<void> _checkIfNearRoute() async {
+    if (!_isPinning) return;
+
+    final center = _mapController.camera.center;
+
+    try {
+      // Check all collector routes
+      final routesSnapshot =
+          await FirebaseFirestore.instance.collection('collector_routes').get();
+
+      if (routesSnapshot.docs.isEmpty) {
+        setState(() {
+          _isNearRoute = false;
+          _snappedLocation = null;
+        });
+        return;
+      }
+
+      LatLng? nearestPoint;
+      double minDistance = double.infinity;
+      const distanceCalc = Distance();
+
+      for (var routeDoc in routesSnapshot.docs) {
+        final routeData = routeDoc.data();
+        final routePoints = (routeData['routePoints'] as List?)
+            ?.map((p) =>
+                LatLng(p['latitude'] as double, p['longitude'] as double))
+            .toList();
+
+        if (routePoints == null || routePoints.isEmpty) continue;
+
+        for (int i = 0; i < routePoints.length - 1; i++) {
+          final closestPoint = _getClosestPointOnSegment(
+            center,
+            routePoints[i],
+            routePoints[i + 1],
+          );
+          final distance =
+              distanceCalc.as(LengthUnit.Meter, center, closestPoint);
+
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestPoint = closestPoint;
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isNearRoute = minDistance <= 35; // 35 meters
+          _snappedLocation = _isNearRoute ? nearestPoint : null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isNearRoute = false;
+          _snappedLocation = null;
+        });
+      }
+    }
+  }
+
+  LatLng _getClosestPointOnSegment(
+      LatLng point, LatLng lineStart, LatLng lineEnd) {
+    final dx = lineEnd.longitude - lineStart.longitude;
+    final dy = lineEnd.latitude - lineStart.latitude;
+
+    if (dx == 0 && dy == 0) return lineStart;
+
+    final t = ((point.longitude - lineStart.longitude) * dx +
+            (point.latitude - lineStart.latitude) * dy) /
+        (dx * dx + dy * dy);
+
+    final tClamped = t.clamp(0.0, 1.0);
+
+    return LatLng(
+      lineStart.latitude + tClamped * dy,
+      lineStart.longitude + tClamped * dx,
+    );
   }
 
   Future<void> _lockPin() async {
@@ -865,10 +953,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
         ),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.my_location, color: Colors.white),
-            onPressed: _centerOnUserLocation,
-          ),
+          if (!_isPinning)
+            IconButton(
+              icon: const Icon(Icons.my_location, color: Colors.white),
+              onPressed: _centerOnUserLocation,
+            ),
         ],
       ),
       body: Stack(
@@ -878,6 +967,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
             options: MapOptions(
               initialCenter: _initialCenter,
               initialZoom: _initialZoom,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
               onPositionChanged: (position, hasGesture) {
                 if (hasGesture) _onMapMove();
               },
@@ -922,6 +1014,19 @@ class _UserMapScreenState extends State<UserMapScreen> {
                       ),
                     );
                   }),
+                  // Snapped location indicator (show where pin will actually be placed)
+                  if (_isPinning && _snappedLocation != null)
+                    Marker(
+                      point: _snappedLocation!,
+                      width: 30,
+                      height: 30,
+                      alignment: const Alignment(0.0, -0.9),
+                      child: const Icon(
+                        Icons.circle,
+                        size: 12,
+                        color: Color(0xFF00A86B),
+                      ),
+                    ),
                 ],
               ),
             ],
@@ -929,24 +1034,46 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
           // Center pin when pinning mode
           if (_isPinning)
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.location_on,
-                    size: 48,
-                    color: Colors.red,
+            Align(
+              alignment: const Alignment(0.0, -0.05),
+              child: Icon(
+                Icons.location_on,
+                size: 48,
+                color: _isNearRoute ? const Color(0xFF00A86B) : Colors.grey,
+              ),
+            ),
+
+          // Message when not near route
+          if (_isPinning && !_isNearRoute && _showDoneButton)
+            Positioned(
+              bottom: 20,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade800,
+                    borderRadius: BorderRadius.circular(30),
                   ),
-                  Container(
-                    width: 4,
-                    height: 4,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.block, color: Colors.white, size: 20),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'That road is not routed for collection',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
 
@@ -991,10 +1118,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
               ),
             ),
 
-          // Done button when pin is locked
-          if (_showDoneButton)
+          // Done button when pin is locked (only if near route)
+          if (_showDoneButton && _isNearRoute)
             Positioned(
-              bottom: 100,
+              bottom: 20,
               left: 0,
               right: 0,
               child: Center(

@@ -31,20 +31,57 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      await _authService.signInWithEmail(
+      final result = await _authService.signInWithEmail(
         _emailController.text.trim(),
         _passwordController.text,
       );
 
+      if (result == null) {
+        throw 'Login failed. Please try again.';
+      }
+
       if (mounted) {
-        // Navigation handled by StreamBuilder in main.dart
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Login successful!'),
+            backgroundColor: Color(0xFF00A86B),
+            duration: Duration(seconds: 1),
+          ),
+        );
+
+        // Force navigation by popping until root, StreamBuilder will handle routing
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       if (mounted) {
+        String errorMessage = e.toString();
+        // Clean up error message
+        if (errorMessage.contains('Exception: ')) {
+          errorMessage = errorMessage.replaceAll('Exception: ', '');
+        }
+        if (errorMessage.contains('[firebase_auth/')) {
+          if (errorMessage.contains('user-not-found')) {
+            errorMessage = 'No account found with this email.';
+          } else if (errorMessage.contains('wrong-password')) {
+            errorMessage = 'Incorrect password. Please try again.';
+          } else if (errorMessage.contains('invalid-email')) {
+            errorMessage = 'Invalid email format.';
+          } else if (errorMessage.contains('user-disabled')) {
+            errorMessage = 'This account has been disabled.';
+          } else if (errorMessage.contains('too-many-requests')) {
+            errorMessage = 'Too many failed attempts. Please try again later.';
+          } else if (errorMessage.contains('network-request-failed')) {
+            errorMessage = 'Network error. Please check your connection.';
+          } else if (errorMessage.contains('invalid-credential')) {
+            errorMessage = 'Invalid email or password.';
+          }
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(e.toString()),
+            content: Text(errorMessage),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -145,6 +182,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 TextFormField(
                   controller: _passwordController,
                   obscureText: _obscurePassword,
+                  keyboardType: TextInputType.text,
+                  autocorrect: false,
+                  enableSuggestions: false,
                   decoration: InputDecoration(
                     labelText: 'Password',
                     prefixIcon: const Icon(Icons.lock_outline),
@@ -170,10 +210,21 @@ class _LoginScreenState extends State<LoginScreen> {
                       borderSide:
                           const BorderSide(color: Color(0xFF00A86B), width: 2),
                     ),
+                    errorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Colors.red),
+                    ),
+                    focusedErrorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Colors.red, width: 2),
+                    ),
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return 'Please enter your password';
+                    }
+                    if (value.length < 6) {
+                      return 'Password must be at least 6 characters';
                     }
                     return null;
                   },

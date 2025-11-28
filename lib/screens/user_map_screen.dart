@@ -1251,14 +1251,14 @@ class _UserMapScreenState extends State<UserMapScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isLoadingLocation) {
-      return Scaffold(
-        backgroundColor: const Color(0xFF00A86B),
+      return const Scaffold(
+        backgroundColor: Color(0xFF00A86B),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const CircularProgressIndicator(color: Colors.white),
-              const SizedBox(height: 16),
+              CircularProgressIndicator(color: Colors.white),
+              SizedBox(height: 16),
               Text(
                 'Getting your location...',
                 style: TextStyle(color: Colors.white),
@@ -1490,12 +1490,12 @@ class _UserMapScreenState extends State<UserMapScreen> {
                     color: Colors.grey.shade800,
                     borderRadius: BorderRadius.circular(30),
                   ),
-                  child: Row(
+                  child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.block, color: Colors.white, size: 20),
-                      const SizedBox(width: 8),
-                      const Text(
+                      Icon(Icons.block, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
                         'That road is not routed for collection',
                         style: TextStyle(
                           fontSize: 14,

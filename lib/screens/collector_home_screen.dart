@@ -535,8 +535,9 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
                                 final garbageLat = data['latitude'] as double?;
                                 final garbageLng = data['longitude'] as double?;
 
-                                if (garbageLat == null || garbageLng == null)
+                                if (garbageLat == null || garbageLng == null) {
                                   continue;
+                                }
 
                                 final garbagePoint =
                                     LatLng(garbageLat, garbageLng);
@@ -931,7 +932,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     final hours = duration.inHours;
     final minutes = duration.inMinutes % 60;
     if (hours > 0) {
-      return '${hours}.${(minutes / 60 * 10).toInt()}hrs';
+      return '$hours.${(minutes / 60 * 10).toInt()}hrs';
     }
     return '${minutes}mins';
   }
